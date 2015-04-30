@@ -1,0 +1,41 @@
+{
+  "name": "rendo",
+  "version": "0.1.0",
+  "description": "Client for interfacing with endpoints hosted by an endo-style server",
+  "main": "index.js",
+  "scripts": {
+    "bundle": "./node_modules/.bin/browserify ./index.js -o ./build/index.js",
+    "lint": "./node_modules/.bin/jshint *.js --exclude=/node_modules",
+    "test": "node test"
+  },
+  "jshintConfig": {
+    "expr": true,
+    "laxbreak": true
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/deanlandolt/rendo.git"
+  },
+  "keywords": [
+    "endo",
+    "endpoints",
+    "http",
+    "websockets",
+    "request"
+  ],
+  "author": "Dean Landolt <dean@deanlandolt.com>",
+  "license": "MIT",
+  "bugs": {
+    "url": "https://github.com/deanlandolt/rendo/issues"
+  },
+  "homepage": "https://github.com/deanlandolt/rendo",
+  "dependencies": {
+    "multiplex": "^5.0.0",
+    "reconnect-engine": "^0.1.0"
+  },
+  "devDependencies": {
+    "browserify": "^8.0.3",
+    "endo": "https://github.com/deanlandolt/endo/tarball/master",
+    "jshint": "2.7.0"
+  }
+}

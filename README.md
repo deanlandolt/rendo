@@ -1,2 +1,3 @@
 # rendo
-Client library for requesting endpoints from an endo-style server
+
+Client for interfacing with endpoints hosted by an endo-style server
