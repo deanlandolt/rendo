@@ -11,7 +11,10 @@
 <script src="/build/index.js"></script>
 <script>
 
-var api = rendo();
+var endpointUrl = '';
+var api = rendo(endpointUrl).on('error', function (error) {
+  console.log('wth', error)
+});
 
 [
   '/v1/body/literal/number',
@@ -20,9 +23,9 @@ var api = rendo();
   '/v1/body/literal/object',
 ].forEach(function (path) {
   api.request(path).then(function (result) {
-    result.body.then(function (body) {
-      console.log(path, body);
-    })
+    console.log(path, result.body);
+  }, function (error) {
+    console.log('ERROR', error)
   });
 });
 
@@ -33,7 +36,11 @@ var api = rendo();
   api.request(path).then(function (result) {
     result.body.on('data', function (data) {
       console.log(path, 'item:', data);
-    })
+    }).on('error', function (error) {
+      console.log('STREAM ERROR', error);
+    });
+  }, function (error) {
+    console.log('ERROR', error)
   });
 });
 
