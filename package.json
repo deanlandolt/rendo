@@ -4,7 +4,8 @@
   "description": "Client for interfacing with endpoints hosted by an endo-style server",
   "main": "index.js",
   "scripts": {
-    "bundle": "./node_modules/.bin/browserify ./index.js -o ./build/index.js",
+    "build": "./node_modules/.bin/browserify ./index.js -s rendo > ./build/index.js",
+    "example": "node example/server.js",
     "lint": "./node_modules/.bin/jshint *.js --exclude=/node_modules",
     "test": "node test"
   },
@@ -30,12 +31,18 @@
   },
   "homepage": "https://github.com/deanlandolt/rendo",
   "dependencies": {
+    "JSONStream": "^0.10.0",
+    "bluebird": "^2.9.25",
+    "concat-stream": "^1.4.8",
     "multiplex": "^5.0.0",
-    "reconnect-engine": "^0.1.0"
+    "reconnect-engine": "^0.1.0",
+    "split": "^0.3.3"
   },
   "devDependencies": {
     "browserify": "^8.0.3",
+    "ecstatic": "^0.7.4",
     "endo": "https://github.com/deanlandolt/endo/tarball/master",
+    "engine.io-stream": "^0.4.3",
     "jshint": "2.7.0"
   }
 }
