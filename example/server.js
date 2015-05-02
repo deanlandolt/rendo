@@ -18,8 +18,8 @@ var server = http.createServer(function (req, res) {
 
 }).listen(8001);
 
-var engine = Engine(function(con) {
-  con.pipe(api.createStream()).pipe(con);
+var engine = Engine(function(connection) {
+  connection.pipe(api.createStream()).pipe(connection);
 });
 
 engine.attach(server, '/ws');

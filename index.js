@@ -2,9 +2,9 @@ var concat = require('concat-stream');
 var EventEmitter = require('events').EventEmitter;
 var JSONStream = require('JSONStream');
 var multiplex = require('multiplex');
-var Promise = require("bluebird");
+var Promise = require('bluebird');
 var reconnect = require('reconnect-engine');
-var split2 = require('split2');
+var through2 = require('through2');
 
 //
 // regex for sniffing content type for JSON/JSONStream-capable responses
@@ -22,11 +22,11 @@ module.exports = function (url, options) {
 
   var connection = reconnect(function (stream) {
 
-    source = multiplex(function (stream, id) {
+    source = multiplex(function (eventStream, id) {
       //
-      // emit channel events for server-initated streams
+      // emit "channel" events for all server-initated streams
       //
-      client.emit('channel', id, stream);
+      client.emit('channel', id, eventStream);
     });
 
     source.pipe(stream).pipe(source);
@@ -35,12 +35,14 @@ module.exports = function (url, options) {
     client.emit('connect');
   });
 
+  var requesttId = 0;
+
   client.request = function (context) {
     if (typeof context === 'string') {
       context = { url: context };
     }
 
-    var headersReceived;
+    var handled;
     return new Promise(function (resolve, reject) {
 
       //
@@ -52,66 +54,71 @@ module.exports = function (url, options) {
         });
       }
 
+      function onhead(result) {
+        var headers = result.headers || {};
+        var objMode = (headers['content-type'] || '').match(OBJ_MODE_RE);
+
+        //
+        // pipe through JSONStream if stream-parasable content-type
+        //
+        if (objMode && objMode[2]) {
+
+          result.body = stream
+            .pipe(JSONStream.parse([/./]))
+            .on('error', onerror);
+
+          onresponse(result);
+        }
+
+        //
+        // non-streaming json, collect up body and run through JSON.parse
+        //
+        else if (objMode) {
+
+          stream.pipe(concat(function (value) {
+            try {
+              result.body = JSON.parse(value);
+              onresponse(result);
+            }
+            catch (error) {
+              onerror(error);
+            }
+          }));
+        }
+
+        //
+        // pass stream along directly
+        //
+        else {
+          result.body = stream;
+          onresponse(result);
+        }
+      }
+
+      function onerror(error) {
+        if (!handled) {
+          handled = true;
+          reject(error);
+        }
+      }
+
+      function onresponse(response) {
+        if (!handled) {
+          handled = true;
+          resolve(response);
+        }
+      }
+
       //
       // create a new substream for request w/ a unique id
       //
-      var stream = source.createStream(Date.now() + ':' + Math.random());
+      var stream = source.createStream(requesttId++);
 
       stream
-        .on('error', reject)
-        .pipe(split2(/(\r?\n)/))
-        .on('data', function (data) {
-          if (headersReceived) {
-            return;
-          }
-
-          headersReceived = true;
-          stream.removeListener('error', reject);
-
-          var context;
-          try {
-            context = JSON.parse(data) || {};
-          }
-          catch (error) {
-            return reject(error);
-          }
-
-          var headers = context.headers || {};
-          var objMode = (headers['content-type'] || '').match(OBJ_MODE_RE);
-
-          //
-          // pipe through JSONStream if `stream-parsable` param set
-          //
-          if (objMode && objMode[2]) {
-            context.body = stream.pipe(JSONStream.parse(objMode[4]));
-            resolve(context);
-          }
-
-          //
-          // non-streaming json, collect up body and run through JSON.parse
-          //
-          else if (objMode) {
-            var collect = concat(function (data) {
-              try {
-                context.body = JSON.parse(data);
-                resolve(context);
-              }
-              catch (error) {
-                reject(error);
-              }
-            });
-
-            stream.once('error', reject).pipe(collect);
-          }
-
-          //
-          // pass stream along directly
-          //
-          else {
-            context.body = stream;
-            resolve(context);
-          }
-        });
+        .on('error', onerror)
+        .pipe(reqHeaded())
+        .on('error', onerror)
+        .on('head', onhead);
 
       //
       // initiate request by writing context object as JSON to stream
@@ -122,8 +129,8 @@ module.exports = function (url, options) {
   };
 
   connection.on('error', function (error) {
-    console.log('CONN ERR', error);
-  })
+    client.emit('error', error);
+  });
 
   connection.on('disconnect', function () {
     source = null;
@@ -137,3 +144,37 @@ module.exports = function (url, options) {
 
   return client;
 };
+
+
+function reqHeaded() {
+  return through2(function (chunk, enc, cb) {
+
+    if (this._headReceived) {
+      return cb(null, chunk);
+    }
+
+    var string = chunk.toString('utf8');
+    var index = string.indexOf('\n');
+
+    if (index < 0) {
+      this._headBuffer += string;
+      return cb();
+    }
+
+    var head = (this._headBuffer || '') + string.substring(0, index);
+    try {
+      this._headParsed = JSON.parse(head);
+      this._headReceived = true;
+    }
+    catch (error) {
+      cb(new Error('Bad head: ' + head));
+    }
+
+    this.pause();
+    this.emit('head', this._headParsed);
+
+    var rest = string.substring(index + 1);
+    cb(null, Buffer(rest, 'utf8'));
+
+  });
+}

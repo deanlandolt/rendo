@@ -1,51 +1,8 @@
 <!DOCTYPE html>
 <html>
 <head>
-
-<meta charset="utf-8">
-<title>Rendo Endpoint Bindin</title>
-
 </head>
 <body>
-
-<script src="/build/index.js"></script>
-<script>
-
-var endpointUrl = '';
-var api = rendo(endpointUrl).on('error', function (error) {
-  console.log('wth', error)
-});
-
-[
-  '/v1/body/literal/number',
-  '/v1/body/literal/string',
-  '/v1/body/literal/array',
-  '/v1/body/literal/object',
-].forEach(function (path) {
-  api.request(path).then(function (result) {
-    console.log(path, result.body);
-  }, function (error) {
-    console.log('ERROR', error)
-  });
-});
-
-[
-  '/v1/body/stream/array',
-  '/v1/body/stream/object',
-].forEach(function (path) {
-  api.request(path).then(function (result) {
-    result.body.on('data', function (data) {
-      console.log(path, 'item:', data);
-    }).on('error', function (error) {
-      console.log('STREAM ERROR', error);
-    });
-  }, function (error) {
-    console.log('ERROR', error)
-  });
-});
-
-
-</script>
-
+<script src="./client.bundle.js"></script>
 </body>
 </html>

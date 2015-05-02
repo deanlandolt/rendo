@@ -4,9 +4,10 @@
   "description": "Client for interfacing with endpoints hosted by an endo-style server",
   "main": "index.js",
   "scripts": {
-    "build": "./node_modules/.bin/browserify ./index.js -s rendo > ./build/index.js",
+    "build-standalone": "browserify ./index.js -s rendo > ./rendo.js",
+    "build-example": "browserify ./example/client.js > ./example/client.bundle.js",
     "example": "node example/server.js",
-    "lint": "./node_modules/.bin/jshint *.js --exclude=/node_modules",
+    "lint": "jshint *.js --exclude=/node_modules",
     "test": "node test"
   },
   "jshintConfig": {
