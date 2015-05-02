@@ -5,7 +5,6 @@ var apiUrl = '';
 var api = rendo(apiUrl);
 
 
-
 Promise.all([
   '/v1/body/stream/array',
   '/v1/body/stream/object',
