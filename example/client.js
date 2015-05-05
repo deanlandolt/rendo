@@ -1,16 +1,16 @@
 var async = require('async');
 var rendo = require('../');
 
-var api = rendo();
+var api = rendo({ endpointRange: 'v1' });
 
 
 async.map([
-  '/v1/body/stream/array',
-  '/v1/body/stream/object',
+  '/body/stream/array',
+  '/body/stream/object',
 ], api.request, function (err, results) {
-  console.log(err);
+  console.log('err:', err);
 
-  results.map(function (result) {
+  results.forEach(function (result) {
     result.body
       .on('error', console.error.bind(console))
       .on('end', function () {
@@ -25,17 +25,17 @@ async.map([
 
 
 async.map([
-  '/v1/body/literal/null',
-  '/v1/body/literal/boolean',
-  '/v1/body/literal/number',
-  '/v1/body/literal/buffer',
-  '/v1/body/literal/string',
-  '/v1/body/literal/array',
-  '/v1/body/literal/object',
+  '/body/literal/null',
+  '/body/literal/boolean',
+  '/body/literal/number',
+  '/body/literal/buffer',
+  '/body/literal/string',
+  '/body/literal/array',
+  '/body/literal/object',
 ], api.request, function (err, results) {
-  console.log(err);
+  console.log('err:', err);
 
-  results.map(function (result) {
+  results.forEach(function (result) {
     console.log(result);
   });
 

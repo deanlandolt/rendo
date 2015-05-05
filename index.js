@@ -93,7 +93,7 @@ module.exports = function (options) {
 
   client.request = function (request, cb) {
     if (typeof request === 'string') {
-      request = { url: request };
+      request = { endpointPath: request };
     }
 
     //
