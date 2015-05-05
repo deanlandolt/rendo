@@ -1,11 +1,10 @@
-var config = require('endo/test/fixtures/config');
 var ecstatic = require('ecstatic');
 var endo = require('endo');
 var Engine = require('engine.io-stream');
 var http = require('http');
 var rendo = require('../');
 
-var api = endo(config.api);
+var api = endo(require('endo/test/fixtures/api'));
 api.includeErrorStack = true;
 
 var assets = ecstatic({ root: __dirname + '/../' });
@@ -14,7 +13,7 @@ var server = http.createServer(function (req, res) {
     return assets(req, res);
   }
 
-  api.handleRequest(req, res);
+  api.handle(req, res);
 
 }).listen(8001);
 
