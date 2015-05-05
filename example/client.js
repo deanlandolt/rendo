@@ -1,15 +1,16 @@
-var Promise = require('bluebird');
+var async = require('async');
 var rendo = require('../');
 
-var apiUrl = '';
-var api = rendo(apiUrl);
+var api = rendo();
 
 
-Promise.all([
+async.map([
   '/v1/body/stream/array',
   '/v1/body/stream/object',
-].map(function (path) {
-  return api.request(path).then(function (result) {
+], api.request, function (err, results) {
+  console.log(err);
+
+  results.map(function (result) {
     result.body
       .on('error', console.error.bind(console))
       .on('end', function () {
@@ -18,18 +19,12 @@ Promise.all([
       .on('data', function (data) {
         console.log(path, 'item:', data);
       })
+  });
 
-  })
-
-})).then(function () {
-  console.log('FIN STREAM')
-})
-.catch(function (error) {
-  console.log('DAMNIT STREAM', error)
 });
 
 
-Promise.all([
+async.map([
   '/v1/body/literal/null',
   '/v1/body/literal/boolean',
   '/v1/body/literal/number',
@@ -37,15 +32,11 @@ Promise.all([
   '/v1/body/literal/string',
   '/v1/body/literal/array',
   '/v1/body/literal/object',
-].map(function (path) {
+], api.request, function (err, results) {
+  console.log(err);
 
-  return api.request(path).then(function (result) {
-    console.log(path, result);
+  results.map(function (result) {
+    console.log(result);
   });
 
-})).then(function () {
-  console.log('FIN');
-})
-.catch(function (error) {
-  console.log('DAMNIT', error)
 });

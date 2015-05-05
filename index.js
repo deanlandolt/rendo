@@ -2,15 +2,16 @@ var concat = require('concat-stream');
 var EventEmitter = require('events').EventEmitter;
 var JSONStream = require('JSONStream');
 var multiplex = require('multiplex');
-var Promise = require('bluebird');
 var reconnect = require('reconnect-engine');
-var split2 = require('split2');
 var through2 = require('through2');
 
 //
 // regex for sniffing content type for JSON/JSONStream-capable responses
 //
+// TODO: would be nicer to associate stream serializations with content types
 var OBJ_MODE_RE = /^application\/json(;.*(parse)(=([^;]+)?)?)?/;
+
+function noop() {}
 
 //
 // returns an api client with an API that mirrors `endo`
@@ -21,71 +22,64 @@ module.exports = function (options) {
     options = { url: options };
   }
 
-  // TODO: socket path discovery?
   options.url || (options.url = '');
   options.socketPath = options.url + (options.socketPath || '/ws');
   var baseRange = options.endpointRange || '*';
 
   var client = new EventEmitter();
   var requestId = 0;
-  var deferreds = {};
+  var requests = {};
   
+  function onResponse(body, meta) {
 
-  var connection = reconnect(function (socket) {
+    var response = JSON.parse(meta);
+    var request = requests[response.id];
 
-    function onResponse (stream, meta) {
-
-      var response = JSON.parse(meta);
-      var deferred = deferreds[response.id];
-      stream.on('error', deferred.reject);
-
-      //
-      // skip error response handling, these are handled when emitted on stream
-      //
-      if (response.error) {
-        return;
-      }
-
-      var objMode = (response.headers['content-type'] || '').match(OBJ_MODE_RE);
-
-      //
-      // pipe through JSONStream if stream-parsable content-type
-      //
-      if (objMode && objMode[2]) {
-        response.body = stream
-          .pipe(JSONStream.parse([/./]))
-          .on('error', deferred.reject);
-
-        deferred.resolve(response);
-      }
-
-      //
-      // non-streaming json, collect up body and run through JSON.parse
-      //
-      else if (objMode) {
-
-        stream.pipe(concat(function (value) {
-          try {
-            response.body = JSON.parse(value);
-            deferred.resolve(response);
-          }
-          catch (error) {
-            deferred.reject(error);
-          }
-        }));
-      }
-
-      //
-      // pass stream along directly
-      //
-      else {
-        response.body = stream;
-        deferred.resolve(response);
-      }
-
+    //
+    // skip error response handling, these are handled when emitted on stream
+    //
+    if (response.error) {
+      return request.cb(response.error);
     }
 
-    var source = connection.source = multiplex({ error: true }, onResponse)
+    var headers = response.headers || {};
+    var objMode = (headers['content-type'] || '').match(OBJ_MODE_RE);
+
+    //
+    // pipe through JSONStream if stream-parsable content-type
+    //
+    if (objMode && objMode[2]) {
+      response.body = body
+        .pipe(JSONStream.parse([/./]));
+
+      return request.cb(response);
+    }
+
+    //
+    // non-streaming json, collect up body and run through JSON.parse
+    //
+    if (objMode) {
+      return body.pipe(concat(function (value) {
+        try {
+          response.body = JSON.parse(value);
+          request.cb(null, response);
+        }
+        catch (error) {
+          request.cb(error);
+        }
+      }));
+    }
+
+    //
+    // pass stream along directly
+    //
+    response.body = body;
+    request.cb(response);
+
+  }
+
+  function onConnect(socket) {
+    var source = connection.source = multiplex(onResponse)
       .on('error', function (error) {
         client.disconnect();
       });
@@ -93,59 +87,61 @@ module.exports = function (options) {
     source.pipe(socket).pipe(source);
 
     client.emit('connect', connection);
-  });
+  }
 
-  client.request = function (context) {
-    if (typeof context === 'string') {
-      context = { endpointPath: context };
+  var connection = reconnect(onConnect);
+
+  client.request = function (request, cb) {
+    if (typeof request === 'string') {
+      request = { url: request };
     }
 
     //
     // add an id to associate with response steram
     //
-    context.id = requestId++;
+    request.id = requestId++;
 
     //
     // add range prefix to url, intersected with any provided range
     //
-    context.endpointRange = (context.endpointRange || '') + ' ' + baseRange;
+    request.endpointRange = (request.endpointRange || '') + ' ' + baseRange;
 
-    return new Promise(function (resolve, reject) {
+    //
+    // create a new substream for request
+    //
+    function sendRequest() {
+      requests[request.id] = {
+        cb: function (err, res) {
+          console.log('CALLED', err, res, request.handled);
+          request.handled = true;
+          request.cb = noop
+        },
+        stream: process.nextTick(function () {
+          connection.source.createStream(JSON.stringify(request))
+        })
+      };
+    }
 
-      //
-      // create a new substream for request
-      //
-      function sendRequest() {
-        deferreds[context.id] = {
-          resolve: resolve,
-          reject: reject,
-          request: connection.source.createStream(JSON.stringify(context))
-        };
-      }
-
-      //
-      // send immediately if possible, or defer until connected
-      //
-      if (connection.source) {
-        sendRequest();
-      }
-      else {
-        connection.once('connect', sendRequest);
-      }
-
-    });
+    //
+    // send immediately if possible, or defer until connected
+    //
+    if (connection.source) {
+      process.nextTick(sendRequest);
+    }
+    else {
+      connection.once('connect', sendRequest);
+    }
   };
 
   client.disconnect = function () {
-    for (var id in deferreds) {
-      deferreds[id].reject(new Error('Client disconnected'));
+    for (var id in requests) {
+      requests[id].cb(new Error('Client disconnected'));
     }
-    deferreds = {};
+    requests = {};
     connection.disconnect();
   };
 
   connection.on('error', function (error) {
-    client.disconnect();
     client.emit('error', error);
   });
 
@@ -156,8 +152,6 @@ module.exports = function (options) {
   connection.on('reconnect', function () {
     client.emit('reconnect');
   });
-
-  // TODO: disconnect/close
 
   connection.connect(options.socketPath);
 

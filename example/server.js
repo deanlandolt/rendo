@@ -2,18 +2,25 @@ var ecstatic = require('ecstatic');
 var endo = require('endo');
 var Engine = require('engine.io-stream');
 var http = require('http');
-var rendo = require('../');
 
 var api = endo(require('endo/test/fixtures/api'));
 api.includeErrorStack = true;
 
-var assets = ecstatic({ root: __dirname + '/../' });
+var assets = ecstatic({ root: __dirname });
+var ROOT = '<!DOCTYPE html><script src="/example/client.bundle.js"></script>';
+
 var server = http.createServer(function (req, res) {
-  if (/^\/(example|build)\//.test(req.url)) {
+  if (req.url === '/') {
+    res.writeHead(200, { 'content-type': 'text/html' });
+    return res.end(ROOT);
+  }
+
+  if (req.url.indexOf('/example/') === 0) {
+    req.url = req.url.substring(8);
     return assets(req, res);
   }
 
-  api.handle(req, res);
+  return api.handle(req, res);
 
 }).listen(8001);
 
