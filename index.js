@@ -112,13 +112,11 @@ module.exports = function (options) {
     function sendRequest() {
       requests[request.id] = {
         cb: function (err, res) {
-          console.log('CALLED', err, res, request.handled);
-          request.handled = true;
-          request.cb = noop
+          context.handled = true;
+          context.cb = noop
+          cb(err, res);
         },
-        stream: process.nextTick(function () {
-          connection.source.createStream(JSON.stringify(request))
-        })
+        stream: connection.source.createStream(JSON.stringify(request))
       };
     }
 
@@ -126,10 +124,14 @@ module.exports = function (options) {
     // send immediately if possible, or defer until connected
     //
     if (connection.source) {
-      process.nextTick(sendRequest);
+      sendRequest();
     }
     else {
-      connection.once('connect', sendRequest);
+      connection.once('connect', function () {
+        process.nextTick(function () {
+          sendRequest()
+        });
+      });
     }
   };
 
