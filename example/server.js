@@ -25,7 +25,13 @@ var server = http.createServer(function (req, res) {
 }).listen(8001);
 
 var engine = Engine(function(connection) {
-  connection.pipe(api.createStream()).pipe(connection);
+  var stream = api.createStream();
+
+  connection.pipe(stream).pipe(connection);
+
+  stream.on('error', function (error) {
+    connection.destroy(error);
+  });
 });
 
 engine.attach(server, '/ws');

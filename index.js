@@ -1,161 +1,194 @@
 var concat = require('concat-stream');
 var EventEmitter = require('events').EventEmitter;
+var inherits = require('util').inherits;
 var JSONStream = require('JSONStream');
 var multiplex = require('multiplex');
+var Promise = require('bluebird');
+Promise.longStackTraces(); // TODO: remove
 var reconnect = require('reconnect-engine');
+var split2 = require('split2');
 var through2 = require('through2');
 
 //
 // regex for sniffing content type for JSON/JSONStream-capable responses
 //
 // TODO: would be nicer to associate stream serializations with content types
-var OBJ_MODE_RE = /^application\/json(;.*(parse)(=([^;]+)?)?)?/;
+var OBJ_MODE_RE = /^application\/json;.*(parse|stream)/;
 
-function noop() {}
+var requestId = 0;
 
 //
 // returns an api client with an API that mirrors `endo`
 //
-module.exports = function (options) {
+function Rendo(options) {
+  if (!(this instanceof Rendo)) {
+    return new Rendo(options);
+  }
+
   options || (options = {});
-  if (typeof options === 'string') {
-    options = { url: options };
-  }
 
-  options.url || (options.url = '');
-  options.socketPath = options.url + (options.socketPath || '/ws');
-  var baseRange = options.endpointRange || '*';
+  this.url = typeof options === 'string' ? options : options.url || '';
+  this.socketPath = this.url + (options.socketPath || '/ws');
 
-  var client = new EventEmitter();
-  var requestId = 0;
-  var requests = {};
-  
-  function onResponse(body, meta) {
+  this.endpointRange = options.endpointRange || '*';
+}
 
-    var response = JSON.parse(meta);
-    var request = requests[response.id];
+inherits(Rendo, EventEmitter);
+
+Rendo.prototype.connect = function (options) {
+  var client = this;
+
+  options || (options = {});
+  client.disconnect();
+
+  client.connection = options;
+  var socket = client.socket = reconnect();
+
+  //
+  // emit connection options on first successful connect
+  //
+  socket.once('connect', function () {
+    client.emit('connection', options);
+  });
+
+  socket.on('connect', function (stream) {
+    var source = client.source = multiplex({ error: true });
+
+    source.pipe(stream).pipe(source);
+
+    source.on('error', function (error) {
+      client.disconnect();
+    });
+
+    client.emit('connected');
+  });
+
+  socket.on('disconnect', function () {
+    client.source = null;
+    client.emit('disconnected');
+  });
+
+  socket.on('reconnect', function () {
+    client.emit('reconnecting');
+  });
+
+  socket.on('error', function (error) {
+    client.disconnect(error);
+  });
+
+  socket.connect(client.socketPath);
+
+  return client;
+};
+
+Rendo.prototype.request = function (context) {
+
+  var client = this;
+  return new Promise(function (resolve, reject) {
 
     //
-    // skip error response handling, these are handled when emitted on stream
+    // defer request until connected
     //
-    if (response.error) {
-      return request.cb(response.error);
-    }
-
-    var headers = response.headers || {};
-    var objMode = (headers['content-type'] || '').match(OBJ_MODE_RE);
-
-    //
-    // pipe through JSONStream if stream-parsable content-type
-    //
-    if (objMode && objMode[2]) {
-      response.body = body
-        .pipe(JSONStream.parse([/./]));
-
-      return request.cb(response);
-    }
-
-    //
-    // non-streaming json, collect up body and run through JSON.parse
-    //
-    if (objMode) {
-      return body.pipe(concat(function (value) {
-        try {
-          response.body = JSON.parse(value);
-          request.cb(null, response);
-        }
-        catch (error) {
-          request.cb(error);
-        }
-      }));
-    }
-
-    //
-    // pass stream along directly
-    //
-    response.body = body;
-    request.cb(response);
-
-  }
-
-  function onConnect(socket) {
-    var source = connection.source = multiplex(onResponse)
-      .on('error', function (error) {
-        client.disconnect();
-      });
-
-    source.pipe(socket).pipe(source);
-
-    client.emit('connect', connection);
-  }
-
-  var connection = reconnect(onConnect);
-
-  client.request = function (request, cb) {
-    if (typeof request === 'string') {
-      request = { endpointPath: request };
+    if (!client.source) {
+      return client.once('connected', function () {
+        client.request(context).then(resolve, reject);
+      })
     }
 
     //
-    // add an id to associate with response steram
+    // request arg can be a string path
     //
-    request.id = requestId++;
+    if (typeof context === 'string') {
+      context = { endpointPath: context };
+    }
 
     //
     // add range prefix to url, intersected with any provided range
     //
-    request.endpointRange = (request.endpointRange || '') + ' ' + baseRange;
+    context.endpointRange = (context.endpointRange || '') + ' ' + client.endpointRange;
 
-    //
-    // create a new substream for request
-    //
-    function sendRequest() {
-      requests[request.id] = {
-        cb: function (err, res) {
-          context.handled = true;
-          context.cb = noop
-          cb(err, res);
-        },
-        stream: connection.source.createStream(JSON.stringify(request))
-      };
+    var id = context.id = ++requestId;
+    var dup = client.source.createStream(JSON.stringify(context));
+
+    function onResponseError(error) {
+      cleanup(error);
     }
 
-    //
-    // send immediately if possible, or defer until connected
-    //
-    if (connection.source) {
-      sendRequest();
-    }
-    else {
-      connection.once('connect', function () {
-        process.nextTick(function () {
-          sendRequest()
-        });
-      });
-    }
-  };
+    dup.on('error', onResponseError);
 
-  client.disconnect = function () {
-    for (var id in requests) {
-      requests[id].cb(new Error('Client disconnected'));
+    function cleanup(error) {
+      dup.end();
+      error && reject(error)
     }
-    requests = {};
-    connection.disconnect();
-  };
 
-  connection.on('error', function (error) {
-    client.emit('error', error);
+    function onMetadata(chunk) {
+      var meta;
+      try {
+        meta = JSON.parse(chunk.toString());
+      }
+      catch (error) {
+        return cleanup(error);
+      }
+
+      var headers = meta.headers || {};
+      var match = (headers['content-type'] || '').match(OBJ_MODE_RE);
+      objMode = match ? match[1] : null;
+
+      //
+      // pipe through JSONStream if stream-parsable content-type
+      //
+      if (objMode === 'parse') {
+        return dup.pipe(through2()).pipe(concat({ encoding: 'string' }, function (value) {
+          try {
+            resolve(JSON.parse(value));
+          }
+          catch (error) {
+            reject(error);
+          }
+        }));
+      }
+
+      //
+      // disconnect error handler for stream -- up to the client
+      //
+      dup.removeListener('error', onResponseError);
+      dup.pause();
+      var body = dup.pipe(through2());
+
+      //
+      // JSON value response, collect up body and run through JSON.parse
+      //
+      if (objMode === 'stream') {
+        resolve(body.pipe(JSONStream.parse([/./])));
+      }
+
+      //
+      // pass response body stream along as complete response
+      //
+      else {
+        response.body = body;
+        resolve(response);
+      }
+
+    }
+
+    dup.once('data', onMetadata);
+
+    //
+    // write context metadata to request stream
+    //
+    dup.write(JSON.stringify(context));
+
   });
-
-  connection.on('disconnect', function () {
-    client.emit('disconnect');
-  });
-
-  connection.on('reconnect', function () {
-    client.emit('reconnect');
-  });
-
-  connection.connect(options.socketPath);
-
-  return client;
 };
+
+Rendo.prototype.disconnect = function (error) {
+  this.socket && this.socket.disconnect();
+  this.socket = null;
+  this.connection && this.emit('connection', null);
+  this.connection = null;
+
+  return this;
+};
+
+module.exports = Rendo;

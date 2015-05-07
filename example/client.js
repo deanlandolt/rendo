@@ -1,42 +1,60 @@
-var async = require('async');
+var concat = require('concat-stream')
+var Promise = require('bluebird');
+Promise.longStackTraces();
 var rendo = require('../');
+var through2 = require('through2');
 
-var api = rendo({ endpointRange: 'v1' });
-
-
-async.map([
-  '/body/stream/array',
-  '/body/stream/object',
-], api.request, function (err, results) {
-  console.log('err:', err);
-
-  results.forEach(function (result) {
-    result.body
-      .on('error', console.error.bind(console))
-      .on('end', function () {
-        console.log('ENDED!');
-      })
-      .on('data', function (data) {
-        console.log(path, 'item:', data);
-      })
-  });
-
-});
+var client = rendo({ endpointRange: 'v1' }).connect()
 
 
-async.map([
+Promise.all([
   '/body/literal/null',
   '/body/literal/boolean',
   '/body/literal/number',
-  '/body/literal/buffer',
   '/body/literal/string',
   '/body/literal/array',
   '/body/literal/object',
-], api.request, function (err, results) {
-  console.log('err:', err);
-
-  results.forEach(function (result) {
-    console.log(result);
+].map(client.request, client))
+.then(function (results) {
+  results.forEach(function (result, i) {
+    console.log(i + ':', result);
   });
+})
+.done();
 
-});
+
+Promise.all([
+  '/body/stream/array',
+  '/body/stream/object',
+].map(client.request, client))
+.then(function (results) {
+
+  return Promise.all(results.map(function (result) {
+    var dfd = Promise.pending();
+
+    result.pipe(through2()).pipe(concat(function (value) {
+      try {
+        dfd.resolve(JSON.parse(value));
+      }
+      catch (error) {
+        dfd.reject(error);
+      }
+    }));
+
+    result.on('error', dfd.reject)
+
+    return dfd.promise
+  }));
+})
+.done();
+
+
+Promise.resolve(client.request('/not/found/xxx')).
+then(function (result) {
+  console.log('not expected', result);
+})
+.catch(function (error) {
+  console.log('Expected: ', error);
+})
+.done();
+
