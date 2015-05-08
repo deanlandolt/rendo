@@ -1,10 +1,11 @@
 var concat = require('concat-stream');
 var EventEmitter = require('events').EventEmitter;
 var inherits = require('util').inherits;
-var JSONStream = require('JSONStream');
+var jsonstream2 = require('jsonstream2');
 var multiplex = require('multiplex');
 var Promise = require('bluebird');
 Promise.longStackTraces(); // TODO: remove
+var Readable = require('readable-stream/readable');
 var reconnect = require('reconnect-engine');
 var split2 = require('split2');
 var through2 = require('through2');
@@ -60,16 +61,17 @@ Rendo.prototype.connect = function (options) {
       client.disconnect();
     });
 
-    client.emit('connected');
+    client.emit('connect');
   });
 
   socket.on('disconnect', function () {
     client.source = null;
-    client.emit('disconnected');
+    client.emit('disconnect');
+    socket.reconnect = client.reconnect;
   });
 
   socket.on('reconnect', function () {
-    client.emit('reconnecting');
+    client.emit('reconnect');
   });
 
   socket.on('error', function (error) {
@@ -81,6 +83,8 @@ Rendo.prototype.connect = function (options) {
   return client;
 };
 
+Rendo.prototype.reconnect = true;
+
 Rendo.prototype.request = function (context) {
 
   var client = this;
@@ -90,7 +94,7 @@ Rendo.prototype.request = function (context) {
     // defer request until connected
     //
     if (!client.source) {
-      return client.once('connected', function () {
+      return client.once('connect', function () {
         client.request(context).then(resolve, reject);
       })
     }
@@ -107,21 +111,23 @@ Rendo.prototype.request = function (context) {
     //
     context.endpointRange = (context.endpointRange || '') + ' ' + client.endpointRange;
 
-    var id = context.id = ++requestId;
-    var dup = client.source.createStream(JSON.stringify(context));
+    var id = ++requestId;
+    var dup = client.source.createStream(id);
 
-    function onResponseError(error) {
-      cleanup(error);
-    }
-
-    dup.on('error', onResponseError);
+    dup.on('error', cleanup);
 
     function cleanup(error) {
-      dup.end();
+      dup.destroy(error);
       error && reject(error)
     }
 
-    function onMetadata(chunk) {
+    function onmeta() {
+
+      var chunk = this.read(1);
+      if (chunk === null) {
+        return this.once('readable', onmeta);
+      }
+
       var meta;
       try {
         meta = JSON.parse(chunk.toString());
@@ -135,44 +141,39 @@ Rendo.prototype.request = function (context) {
       objMode = match ? match[1] : null;
 
       //
-      // pipe through JSONStream if stream-parsable content-type
+      // JSON value response, collect up body and run through JSON.parse
       //
       if (objMode === 'parse') {
-        return dup.pipe(through2()).pipe(concat({ encoding: 'string' }, function (value) {
+        return dup.pipe(concat({ encoding: 'string' }, function (value) {
           try {
             resolve(JSON.parse(value));
           }
           catch (error) {
-            reject(error);
+            cleanup(error);
           }
         }));
-      }
+      };
 
       //
-      // disconnect error handler for stream -- up to the client
-      //
-      dup.removeListener('error', onResponseError);
-      dup.pause();
-      var body = dup.pipe(through2());
-
-      //
-      // JSON value response, collect up body and run through JSON.parse
+      // pipe through jsonstream2 if stream-parsable content-type
       //
       if (objMode === 'stream') {
-        resolve(body.pipe(JSONStream.parse([/./])));
+        resolve(dup.pipe(through2.obj()).pipe(jsonstream2.parse([/./]))
+          .on('error', cleanup)
+          .pipe(through2.obj()));
       }
 
       //
       // pass response body stream along as complete response
       //
       else {
-        response.body = body;
+        response.body = dup.pipe(through2());
         resolve(response);
       }
 
     }
 
-    dup.once('data', onMetadata);
+    dup.once('readable', onmeta);
 
     //
     // write context metadata to request stream
@@ -183,6 +184,7 @@ Rendo.prototype.request = function (context) {
 };
 
 Rendo.prototype.disconnect = function (error) {
+  this.reconnect = false
   this.socket && this.socket.disconnect();
   this.socket = null;
   this.connection && this.emit('connection', null);
