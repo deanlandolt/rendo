@@ -9,6 +9,7 @@ var Readable = require('readable-stream/readable');
 var reconnect = require('reconnect-engine');
 var split2 = require('split2');
 var through2 = require('through2');
+var xtend = require('xtend');
 
 //
 // regex for sniffing content type for JSON/JSONStream-capable responses
@@ -29,28 +30,20 @@ function Rendo(options) {
   options || (options = {});
 
   this.url = typeof options === 'string' ? options : options.url || '';
-  this.socketPath = this.url + (options.socketPath || '/ws');
+  this.socketPath = this.url + (options.socketPath || '');
 
   this.endpointRange = options.endpointRange || '*';
 }
 
 inherits(Rendo, EventEmitter);
 
-Rendo.prototype.connect = function (options) {
+Rendo.prototype.connect = function (connection) {
   var client = this;
 
-  options || (options = {});
+  connection || (connection = {});
   client.disconnect();
 
-  client.connection = options;
   var socket = client.socket = reconnect();
-
-  //
-  // emit connection options on first successful connect
-  //
-  socket.once('connect', function () {
-    client.emit('connection', options);
-  });
 
   socket.on('connect', function (stream) {
     var source = client.source = multiplex({ error: true });
@@ -61,8 +54,20 @@ Rendo.prototype.connect = function (options) {
       client.disconnect();
     });
 
+    //
+    // emit connection config on first successful connect
+    //
+    if (!client.connection) {
+      client.connection = connection;
+      client.emit('connection', connection);
+    }
+
     client.emit('connect');
   });
+
+  function onconnect(stream) {
+
+  }
 
   socket.on('disconnect', function () {
     client.source = null;
@@ -86,100 +91,110 @@ Rendo.prototype.connect = function (options) {
 Rendo.prototype.reconnect = true;
 
 Rendo.prototype.request = function (context) {
-
   var client = this;
+  var connection = this.connection;
   return new Promise(function (resolve, reject) {
+    try {
 
-    //
-    // defer request until connected
-    //
-    if (!client.source) {
-      return client.once('connect', function () {
-        client.request(context).then(resolve, reject);
-      })
+      //
+      // defer request until connected
+      //
+      if (!client.source) {
+        return client.once('connect', function () {
+          client.request(context).then(resolve, reject);
+        })
+      }
+
+      //
+      // request arg can be a string path
+      //
+      if (typeof context === 'string') {
+        context = { endpointPath: context };
+      }
+
+      //
+      // add range prefix to url, intersected with any provided range
+      //
+      context.endpointRange = (context.endpointRange || '') + ' ' + client.endpointRange;
+
+      //
+      // add in default headers
+      //
+      context.headers = xtend(connection.headers, context.headers);
+
+      var id = ++requestId;
+      var dup = client.source.createStream(id);
+
+      dup.on('error', cleanup);
+
+      function cleanup(error) {
+        dup.destroy(error);
+        error && reject(error)
+      }
+
+      function onmeta() {
+
+        var chunk = this.read(1);
+        if (chunk === null) {
+          return this.once('readable', onmeta);
+        }
+
+        var meta;
+        try {
+          meta = JSON.parse(chunk.toString());
+        }
+        catch (error) {
+          return cleanup(error);
+        }
+
+        var headers = meta.headers || {};
+        var match = (headers['content-type'] || '').match(OBJ_MODE_RE);
+        objMode = match ? match[1] : null;
+
+        //
+        // JSON value response, collect up body and run through JSON.parse
+        //
+        if (objMode === 'parse') {
+          return dup.pipe(concat({ encoding: 'string' }, function (value) {
+            try {
+              resolve(JSON.parse(value));
+            }
+            catch (error) {
+              cleanup(error);
+            }
+          }));
+        };
+
+        //
+        // pipe through jsonstream2 if stream-parsable content-type
+        //
+        if (objMode === 'stream') {
+          resolve(dup.pipe(through2.obj()).pipe(jsonstream2.parse([/./]))
+            .on('error', cleanup)
+            .pipe(through2.obj()));
+        }
+
+        //
+        // pass response body stream along as complete response
+        //
+        else {
+          response.body = dup.pipe(through2());
+          resolve(response);
+        }
+
+      }
+
+      dup.once('readable', onmeta);
+
+      //
+      // write context metadata to request stream
+      //
+      dup.write(JSON.stringify(context));
+
     }
-
-    //
-    // request arg can be a string path
-    //
-    if (typeof context === 'string') {
-      context = { endpointPath: context };
+    catch (error) {
+      this.emit('error', error);
     }
-
-    //
-    // add range prefix to url, intersected with any provided range
-    //
-    context.endpointRange = (context.endpointRange || '') + ' ' + client.endpointRange;
-
-    var id = ++requestId;
-    var dup = client.source.createStream(id);
-
-    dup.on('error', cleanup);
-
-    function cleanup(error) {
-      dup.destroy(error);
-      error && reject(error)
-    }
-
-    function onmeta() {
-
-      var chunk = this.read(1);
-      if (chunk === null) {
-        return this.once('readable', onmeta);
-      }
-
-      var meta;
-      try {
-        meta = JSON.parse(chunk.toString());
-      }
-      catch (error) {
-        return cleanup(error);
-      }
-
-      var headers = meta.headers || {};
-      var match = (headers['content-type'] || '').match(OBJ_MODE_RE);
-      objMode = match ? match[1] : null;
-
-      //
-      // JSON value response, collect up body and run through JSON.parse
-      //
-      if (objMode === 'parse') {
-        return dup.pipe(concat({ encoding: 'string' }, function (value) {
-          try {
-            resolve(JSON.parse(value));
-          }
-          catch (error) {
-            cleanup(error);
-          }
-        }));
-      };
-
-      //
-      // pipe through jsonstream2 if stream-parsable content-type
-      //
-      if (objMode === 'stream') {
-        resolve(dup.pipe(through2.obj()).pipe(jsonstream2.parse([/./]))
-          .on('error', cleanup)
-          .pipe(through2.obj()));
-      }
-
-      //
-      // pass response body stream along as complete response
-      //
-      else {
-        response.body = dup.pipe(through2());
-        resolve(response);
-      }
-
-    }
-
-    dup.once('readable', onmeta);
-
-    //
-    // write context metadata to request stream
-    //
-    dup.write(JSON.stringify(context));
-
   });
 };
 

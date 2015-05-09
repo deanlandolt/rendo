@@ -37,7 +37,8 @@
     "jsonstream2": "^1.1.0",
     "multiplex": "^5.0.0",
     "readable-stream": "^1.0.33",
-    "reconnect-engine": "^0.1.0"
+    "reconnect-engine": "^0.1.0",
+    "xtend": "^4.0.0"
   },
   "devDependencies": {
     "browserify": "^8.0.3",
